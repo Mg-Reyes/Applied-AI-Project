@@ -2,6 +2,31 @@ import csv
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
+_GENRE_GROUPS = [
+    {"lofi", "ambient", "chillhop"},
+    {"pop", "indie", "synthwave"},
+    {"rock", "metal", "punk", "alternative"},
+    {"jazz", "blues", "soul", "r&b"},
+    {"classical", "orchestral"},
+]
+
+_MOOD_GROUPS = [
+    {"chill", "relaxed", "mellow", "calm"},
+    {"happy", "upbeat", "joyful"},
+    {"intense", "aggressive", "energetic"},
+    {"focused", "concentrated"},
+    {"moody", "melancholic", "sad"},
+]
+
+def _similarity(a: str, b: str, groups: List[set]) -> float:
+    a, b = a.lower(), b.lower()
+    if a == b:
+        return 1.0
+    for group in groups:
+        if a in group and b in group:
+            return 0.7
+    return 0.1
+
 @dataclass
 class Song:
     """
@@ -78,17 +103,32 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     """
     score = 0.0
     reasons = []
-    
-    # Genre match (40%)
-    if song.get("genre").lower() == user_prefs.get("genre"):
-        score += 0.40
-        reasons.append(f"Genre '{song['genre']}' matches your preference")
-    
-    # Mood match (30%)
-    if song.get("mood").lower() == user_prefs.get("favorite_mood"):
-        score += 0.30
-        reasons.append(f"Mood '{song['mood']}' matches your preference")
-    
+
+    # Genre and mood similarity via sentence embeddings (40% + 30%)
+    user_genre = user_prefs.get('genre', '')
+    user_mood = user_prefs.get('favorite_mood', '')
+    song_genre = song.get('genre', '')
+    song_mood = song.get('mood', '')
+
+    genre_similarity = _similarity(user_genre, song_genre, _GENRE_GROUPS)
+    mood_similarity = _similarity(user_mood, song_mood, _MOOD_GROUPS)
+
+    score += genre_similarity * 0.40
+    if genre_similarity >= 0.7:
+        reasons.append(f"Genre '{song['genre']}' is similar to your preference")
+
+    score += mood_similarity * 0.30
+    if mood_similarity >= 0.7:
+        reasons.append(f"Mood '{song['mood']}' is similar to your preference")
+
+    # Old binary genre/mood matching (replaced by Gemini similarity above)
+    # if song.get("genre").lower() == user_prefs.get("genre"):
+    #     score += 0.40
+    #     reasons.append(f"Genre '{song['genre']}' matches your preference")
+    # if song.get("mood").lower() == user_prefs.get("favorite_mood"):
+    #     score += 0.30
+    #     reasons.append(f"Mood '{song['mood']}' matches your preference")
+
     # Energy match (20%) - closer to target = higher score
     song_energy = song["energy"]
     target_energy = user_prefs["energy"]
@@ -97,7 +137,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     score += energy_score * 0.20
     if energy_score > 0.5:
         reasons.append(f"Energy level {song_energy:.2f} is close to your target of {target_energy:.2f}")
-    
+
     # Acousticness match (10%)
     song_acousticness = song["acousticness"]
     likes_acoustic = user_prefs.get("likes_acoustic", False)
@@ -108,7 +148,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
         if (not likes_acoustic and song_acousticness <= 0.4):
             score += song_acousticness * .1
             reasons.append("Acousticness matches your preference")
-    
+
     return score, reasons
 
 def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
@@ -118,7 +158,8 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
     """
     scored_songs = []
     
-    for song in songs:
+    for i, song in enumerate(songs):
+        print(f"Scoring song {i + 1}/{len(songs)}: {song['title']}")
         score, reasons = score_song(user_prefs, song)
         explanation = "; ".join(reasons) if reasons else "No specific match found"
         scored_songs.append((song, score, explanation))

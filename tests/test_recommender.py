@@ -1,4 +1,4 @@
-from src.recommender import Song, UserProfile, Recommender, recommend_songs
+from src.recommender import Song, UserProfile, Recommender, recommend_songs, score_song
 
 def make_small_recommender() -> Recommender:
     songs = [
@@ -87,15 +87,14 @@ def test_functional_recommend_songs_handles_main_style_prefs_case_insensitively(
 
     assert len(results) == 1
     assert results[0][0]["title"] == "Coffee Shop Stories"
-    assert "Genre 'jazz' matches your preference" in results[0][2]
-    assert "Mood 'relaxed' matches your preference" in results[0][2]
+    assert "Genre 'jazz' is similar to your preference" in results[0][2]
+    assert "Mood 'relaxed' is similar to your preference" in results[0][2]
 
 
 def test_case_insensitivity_edge_case():
     """
     Edge case: Tests that the recommender handles mood/genre case sensitivity.
-    The main.py uses "Relaxed" (capital R) which might not match lowercase data.
-    This would cause the mood match to fail silently.
+    The similarity map normalizes to lowercase, so "Relaxed" and "relaxed" are treated identically.
     """
     songs = [
         Song(
@@ -112,19 +111,17 @@ def test_case_insensitivity_edge_case():
         ),
     ]
     rec = Recommender(songs)
-    
-    # User preference with capital R (like in main.py)
+
+    # User preference with capital R - similarity map lowercases both sides so this matches correctly
     user = UserProfile(
         favorite_genre="jazz",
-        favorite_mood="Relaxed",  # Capital R - CASE MISMATCH
+        favorite_mood="Relaxed",
         target_energy=0.5,
         likes_acoustic=True,
     )
-    
+
     results = rec.recommend(user, k=1)
     assert len(results) == 1
-    # This should ideally match, but will fail if the recommender isn't case-insensitive
-    # The score will be lower due to missing mood match
     song = results[0]
     assert song.genre == "jazz"
 
@@ -185,8 +182,50 @@ def test_identical_scores_edge_case():
     
     # Verify we got 3 results
     assert len(results) == 3
-    # Song A and B should score identically (both 0.9), Song C should score 0
-    # Recommender should handle this gracefully without crashing
+    # Song A and B score identically (pop/happy exact match scores highest)
+    # Song C (rock/intense) scores lower since rock and pop are in different similarity groups
     assert results[0].genre == "pop"
     assert results[1].genre == "pop"
     assert results[2].genre == "rock"
+
+
+def make_song(genre, mood, energy=0.5, acousticness=0.3):
+    return {
+        "id": 1, "title": "Test", "artist": "Test Artist",
+        "genre": genre, "mood": mood, "energy": energy,
+        "tempo_bpm": 100, "valence": 0.5, "danceability": 0.5,
+        "acousticness": acousticness,
+    }
+
+
+def test_similar_genre_scores_higher_than_unrelated_genre():
+    user_prefs = {"genre": "lofi", "favorite_mood": "chill", "energy": 0.4, "likes_acoustic": False}
+    similar_song = make_song(genre="ambient", mood="chill")
+    unrelated_song = make_song(genre="metal", mood="chill")
+
+    similar_score, _ = score_song(user_prefs, similar_song)
+    unrelated_score, _ = score_song(user_prefs, unrelated_song)
+
+    assert similar_score > unrelated_score
+
+
+def test_similar_mood_scores_higher_than_unrelated_mood():
+    user_prefs = {"genre": "jazz", "favorite_mood": "chill", "energy": 0.4, "likes_acoustic": False}
+    similar_song = make_song(genre="jazz", mood="relaxed")
+    unrelated_song = make_song(genre="jazz", mood="intense")
+
+    similar_score, _ = score_song(user_prefs, similar_song)
+    unrelated_score, _ = score_song(user_prefs, unrelated_song)
+
+    assert similar_score > unrelated_score
+
+
+def test_exact_genre_match_scores_higher_than_similar_genre():
+    user_prefs = {"genre": "pop", "favorite_mood": "happy", "energy": 0.7, "likes_acoustic": False}
+    exact_song = make_song(genre="pop", mood="happy")
+    similar_song = make_song(genre="indie", mood="happy")
+
+    exact_score, _ = score_song(user_prefs, exact_song)
+    similar_score, _ = score_song(user_prefs, similar_song)
+
+    assert exact_score > similar_score
