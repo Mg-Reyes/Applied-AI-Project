@@ -105,7 +105,7 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     reasons = []
 
     # Genre and mood similarity via sentence embeddings (40% + 30%)
-    user_genre = user_prefs.get('genre', '')
+    user_genre = user_prefs.get('favorite_genre', '')
     user_mood = user_prefs.get('favorite_mood', '')
     song_genre = song.get('genre', '')
     song_mood = song.get('mood', '')
@@ -159,7 +159,7 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
     scored_songs = []
     
     for i, song in enumerate(songs):
-        print(f"Scoring song {i + 1}/{len(songs)}: {song['title']}")
+        #print(f"Scoring song {i + 1}/{len(songs)}: {song['title']}")
         score, reasons = score_song(user_prefs, song)
         explanation = "; ".join(reasons) if reasons else "No specific match found"
         scored_songs.append((song, score, explanation))
