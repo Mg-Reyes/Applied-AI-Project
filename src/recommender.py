@@ -1,31 +1,66 @@
 import csv
+import json
+import os
+import requests
+import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
-_GENRE_GROUPS = [
-    {"lofi", "ambient", "chillhop"},
-    {"pop", "indie", "synthwave"},
-    {"rock", "metal", "punk", "alternative"},
-    {"jazz", "blues", "soul", "r&b"},
-    {"classical", "orchestral"},
-]
+_HF_API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+_CACHE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "similarity_cache.json")
 
-_MOOD_GROUPS = [
-    {"chill", "relaxed", "mellow", "calm"},
-    {"happy", "upbeat", "joyful"},
-    {"intense", "aggressive", "energetic"},
-    {"focused", "concentrated"},
-    {"moody", "melancholic", "sad"},
-]
+def _load_cache() -> dict:
+    try:
+        with open(_CACHE_PATH, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
-def _similarity(a: str, b: str, groups: List[set]) -> float:
+def _save_cache(cache: dict) -> None:
+    with open(_CACHE_PATH, "w") as f:
+        json.dump(cache, f)
+
+_cache = _load_cache()
+
+def _get_embeddings(texts: List[str]) -> List[List[float]]:
+    token = os.environ.get("HF_TOKEN", "")
+    response = requests.post(
+        _HF_API_URL,
+        headers={"Authorization": f"Bearer {token}"},
+        json={"inputs": texts},
+    )
+    response.raise_for_status()
+    result = response.json()
+    embeddings = []
+    for emb in result:
+        # Some models return token-level (3D); mean-pool to sentence-level if needed
+        arr = np.array(emb)
+        embeddings.append(arr.mean(axis=0) if arr.ndim > 1 else arr)
+    return embeddings
+
+def _cosine_similarity(a, b) -> float:
+    a, b = np.array(a), np.array(b)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+def _similarity(a: str, b: str, kind: str) -> float:
     a, b = a.lower(), b.lower()
     if a == b:
         return 1.0
-    for group in groups:
-        if a in group and b in group:
-            return 0.7
-    return 0.1
+
+    key = f"{kind}:{a}:{b}"
+    if key in _cache:
+        return _cache[key]
+
+    try:
+        embeddings = _get_embeddings([a, b])
+        score = _cosine_similarity(embeddings[0], embeddings[1])
+        score = max(0.0, min(1.0, score))
+    except Exception:
+        score = 0.1
+
+    _cache[key] = score
+    _save_cache(_cache)
+    return score
 
 @dataclass
 class Song:
@@ -110,8 +145,8 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     song_genre = song.get('genre', '')
     song_mood = song.get('mood', '')
 
-    genre_similarity = _similarity(user_genre, song_genre, _GENRE_GROUPS)
-    mood_similarity = _similarity(user_mood, song_mood, _MOOD_GROUPS)
+    genre_similarity = _similarity(user_genre, song_genre, "genre")
+    mood_similarity = _similarity(user_mood, song_mood, "mood")
 
     score += genre_similarity * 0.40
     if genre_similarity >= 0.7:
@@ -120,14 +155,6 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     score += mood_similarity * 0.30
     if mood_similarity >= 0.7:
         reasons.append(f"Mood '{song['mood']}' is similar to your preference")
-
-    # Old binary genre/mood matching (replaced by Gemini similarity above)
-    # if song.get("genre").lower() == user_prefs.get("genre"):
-    #     score += 0.40
-    #     reasons.append(f"Genre '{song['genre']}' matches your preference")
-    # if song.get("mood").lower() == user_prefs.get("favorite_mood"):
-    #     score += 0.30
-    #     reasons.append(f"Mood '{song['mood']}' matches your preference")
 
     # Energy match (20%) - closer to target = higher score
     song_energy = song["energy"]
